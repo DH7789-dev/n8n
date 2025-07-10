@@ -1,0 +1,358 @@
+{
+  "name": "Website Monitoring - Weekly Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "weekly-cron",
+      "name": "Weekly Cron - Monday 9AM",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const today = new Date();\nconst lastWeek = new Date(today);\nlastWeek.setDate(today.getDate() - 7);\n\nconst startDate = lastWeek.toISOString().split('T')[0];\nconst endDate = today.toISOString().split('T')[0];\n\nreturn [{\n  json: {\n    start_date: startDate,\n    end_date: endDate,\n    supabase_url: `YOUR_SUPABASE_URL/rest/v1/daily_kpis?select=*&date=gte.${startDate}&date=lt.${endDate}&order=date.asc`\n  }\n}];"
+      },
+      "id": "prepare-week-dates",
+      "name": "Prepare Week Dates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.supabase_url}}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "YOUR_SUPABASE_ANON_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SUPABASE_ANON_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-week-data",
+      "name": "Get Week Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json.body || [];\nconst startDate = $input.first().json.start_date;\nconst endDate = $input.first().json.end_date;\n\nif (data.length === 0) {\n  return [{\n    json: {\n      message: `No data available for the week ${startDate} to ${endDate}`,\n      hasData: false\n    }\n  }];\n}\n\n// Calculate weekly aggregates\nconst totalChecks = data.reduce((sum, day) => sum + day.total_checks, 0);\nconst totalDowntime = data.reduce((sum, day) => sum + day.total_downtime, 0);\nconst avgUptime = data.reduce((sum, day) => sum + day.global_uptime_percentage, 0) / data.length;\nconst avgResponseTime = data.reduce((sum, day) => sum + day.global_avg_response_time, 0) / data.length;\n\n// Find worst days\nconst worstDay = data.reduce((worst, day) => \n  day.global_uptime_percentage < worst.global_uptime_percentage ? day : worst\n);\n\nconst bestDay = data.reduce((best, day) => \n  day.global_uptime_percentage > best.global_uptime_percentage ? day : best\n);\n\n// Get site-specific stats\nconst siteStats = {};\ndata.forEach(day => {\n  if (day.site_stats) {\n    Object.keys(day.site_stats).forEach(site => {\n      if (!siteStats[site]) {\n        siteStats[site] = {\n          total_checks: 0,\n          total_downtime: 0,\n          uptimes: [],\n          response_times: []\n        };\n      }\n      \n      const siteData = day.site_stats[site];\n      siteStats[site].total_checks += siteData.total_checks || 0;\n      siteStats[site].total_downtime += siteData.total_downtime || 0;\n      siteStats[site].uptimes.push(siteData.uptime_percentage || 0);\n      siteStats[site].response_times.push(siteData.avg_response_time || 0);\n    });\n  }\n});\n\n// Calculate site averages\nconst siteReport = Object.keys(siteStats).map(site => {\n  const stats = siteStats[site];\n  return {\n    site: site,\n    total_checks: stats.total_checks,\n    total_downtime: stats.total_downtime,\n    avg_uptime: stats.uptimes.reduce((a, b) => a + b, 0) / stats.uptimes.length,\n    avg_response_time: stats.response_times.reduce((a, b) => a + b, 0) / stats.response_times.length\n  };\n});\n\n// Sort by worst performing sites\nsiteReport.sort((a, b) => a.avg_uptime - b.avg_uptime);\n\nreturn [{\n  json: {\n    hasData: true,\n    period: {\n      start_date: startDate,\n      end_date: endDate,\n      days_analyzed: data.length\n    },\n    summary: {\n      total_checks: totalChecks,\n      total_downtime: Math.round(totalDowntime),\n      avg_uptime_percentage: Math.round(avgUptime * 100) / 100,\n      avg_response_time: Math.round(avgResponseTime),\n      worst_day: {\n        date: worstDay.date,\n        uptime: worstDay.global_uptime_percentage\n      },\n      best_day: {\n        date: bestDay.date,\n        uptime: bestDay.global_uptime_percentage\n      }\n    },\n    sites: siteReport,\n    raw_data: data\n  }\n}];"
+      },
+      "id": "analyze-week-data",
+      "name": "Analyze Week Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-data-condition",
+              "leftValue": "={{$json.hasData}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-has-data",
+      "name": "Check Has Data",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const report = $json;\nconst period = report.period;\nconst summary = report.summary;\n\n// Create HTML email template\nconst htmlContent = `\n<!DOCTYPE html>\n<html>\n<head>\n    <style>\n        body { font-family: Arial, sans-serif; margin: 20px; }\n        .header { background-color: #f4f4f4; padding: 20px; border-radius: 5px; }\n        .summary { background-color: #e8f5e8; padding: 15px; border-radius: 5px; margin: 20px 0; }\n        .alert { background-color: #ffe8e8; padding: 15px; border-radius: 5px; margin: 20px 0; }\n        .sites-table { width: 100%; border-collapse: collapse; margin: 20px 0; }\n        .sites-table th, .sites-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }\n        .sites-table th { background-color: #f2f2f2; }\n        .good { color: #28a745; }\n        .warning { color: #ffc107; }\n        .danger { color: #dc3545; }\n        .metric { display: inline-block; margin: 10px 20px 10px 0; }\n    </style>\n</head>\n<body>\n    <div class=\"header\">\n        <h2>📊 Weekly Website Monitoring Report</h2>\n        <p><strong>Period:</strong> ${period.start_date} to ${period.end_date} (${period.days_analyzed} days)</p>\n    </div>\n    \n    <div class=\"summary\">\n        <h3>📈 Weekly Summary</h3>\n        <div class=\"metric\">\n            <strong>Overall Uptime:</strong> \n            <span class=\"${summary.avg_uptime_percentage >= 99 ? 'good' : summary.avg_uptime_percentage >= 95 ? 'warning' : 'danger'}\">\n                ${summary.avg_uptime_percentage}%\n            </span>\n        </div>\n        <div class=\"metric\">\n            <strong>Total Checks:</strong> ${summary.total_checks.toLocaleString()}\n        </div>\n        <div class=\"metric\">\n            <strong>Total Downtime:</strong> ${summary.total_downtime} minutes\n        </div>\n        <div class=\"metric\">\n            <strong>Avg Response Time:</strong> ${summary.avg_response_time}ms\n        </div>\n    </div>\n    \n    <div class=\"${summary.avg_uptime_percentage < 95 ? 'alert' : 'summary'}\">\n        <h3>📅 Best & Worst Days</h3>\n        <p><strong>Best Day:</strong> ${summary.best_day.date} (${summary.best_day.uptime}% uptime)</p>\n        <p><strong>Worst Day:</strong> ${summary.worst_day.date} (${summary.worst_day.uptime}% uptime)</p>\n    </div>\n    \n    <h3>🌐 Site-by-Site Performance</h3>\n    <table class=\"sites-table\">\n        <thead>\n            <tr>\n                <th>Site</th>\n                <th>Uptime %</th>\n                <th>Avg Response Time</th>\n                <th>Total Checks</th>\n                <th>Downtime (min)</th>\n                <th>Status</th>\n            </tr>\n        </thead>\n        <tbody>\n${report.sites.map(site => {\n    const status = site.avg_uptime >= 99 ? 'good' : site.avg_uptime >= 95 ? 'warning' : 'danger';\n    const statusText = site.avg_uptime >= 99 ? '✅ Good' : site.avg_uptime >= 95 ? '⚠️ Warning' : '❌ Critical';\n    \n    return `\n            <tr>\n                <td>${site.site}</td>\n                <td class=\"${status}\">${Math.round(site.avg_uptime * 100) / 100}%</td>\n                <td>${Math.round(site.avg_response_time)}ms</td>\n                <td>${site.total_checks.toLocaleString()}</td>\n                <td>${site.total_downtime}</td>\n                <td class=\"${status}\">${statusText}</td>\n            </tr>`;\n}).join('')}\n        </tbody>\n    </table>\n    \n    <div style=\"margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px;\">\n        <h4>📊 Report Generated</h4>\n        <p>This report was automatically generated on ${new Date().toLocaleString()}</p>\n        <p><em>Monitor your websites 24/7 with our automated monitoring system.</em></p>\n    </div>\n</body>\n</html>\n`;\n\n// Create plain text version\nconst textContent = `\nWEEKLY WEBSITE MONITORING REPORT\n=================================\n\nPeriod: ${period.start_date} to ${period.end_date} (${period.days_analyzed} days)\n\nWEEKLY SUMMARY:\n- Overall Uptime: ${summary.avg_uptime_percentage}%\n- Total Checks: ${summary.total_checks.toLocaleString()}\n- Total Downtime: ${summary.total_downtime} minutes\n- Average Response Time: ${summary.avg_response_time}ms\n\nBEST & WORST DAYS:\n- Best Day: ${summary.best_day.date} (${summary.best_day.uptime}% uptime)\n- Worst Day: ${summary.worst_day.date} (${summary.worst_day.uptime}% uptime)\n\nSITE PERFORMANCE:\n${report.sites.map(site => {\n    const status = site.avg_uptime >= 99 ? 'GOOD' : site.avg_uptime >= 95 ? 'WARNING' : 'CRITICAL';\n    return `- ${site.site}: ${Math.round(site.avg_uptime * 100) / 100}% uptime, ${Math.round(site.avg_response_time)}ms avg response (${status})`;\n}).join('\\n')}\n\nReport generated: ${new Date().toLocaleString()}\n`;\n\nreturn [{\n  json: {\n    subject: `Weekly Monitoring Report - ${summary.avg_uptime_percentage}% Uptime (${period.start_date} to ${period.end_date})`,\n    html: htmlContent,\n    text: textContent,\n    report_data: report\n  }\n}];"
+      },
+      "id": "create-email-report",
+      "name": "Create Email Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "monitoring@yourcompany.com",
+        "toEmail": "admin@yourcompany.com, team@yourcompany.com",
+        "subject": "={{$json.subject}}",
+        "emailFormat": "html",
+        "message": "={{$json.html}}",
+        "options": {
+          "attachments": []
+        }
+      },
+      "id": "send-email",
+      "name": "Send Weekly Report Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const report = $input.first().json.report_data;\n\n// Send to Slack if uptime is below threshold\nif (report.summary.avg_uptime_percentage < 95) {\n  const worstSites = report.sites.filter(site => site.avg_uptime < 95);\n  \n  const slackMessage = {\n    text: `🚨 Weekly Monitoring Alert - Low Uptime Detected`,\n    blocks: [\n      {\n        type: \"header\",\n        text: {\n          type: \"plain_text\",\n          text: \"🚨 Weekly Monitoring Alert\"\n        }\n      },\n      {\n        type: \"section\",\n        text: {\n          type: \"mrkdwn\",\n          text: `*Period:* ${report.period.start_date} to ${report.period.end_date}\\n*Overall Uptime:* ${report.summary.avg_uptime_percentage}% ⚠️\\n*Total Downtime:* ${report.summary.total_downtime} minutes`\n        }\n      },\n      {\n        type: \"section\",\n        text: {\n          type: \"mrkdwn\",\n          text: `*Problematic Sites:*\\n${worstSites.map(site => `• ${site.site}: ${Math.round(site.avg_uptime * 100) / 100}% uptime`).join('\\n')}`\n        }\n      },\n      {\n        type: \"section\",\n        text: {\n          type: \"mrkdwn\",\n          text: `*Worst Day:* ${report.summary.worst_day.date} (${report.summary.worst_day.uptime}% uptime)`\n        }\n      }\n    ]\n  };\n  \n  return [{\n    json: {\n      webhook_body: slackMessage,\n      should_alert: true\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    should_alert: false,\n    message: \"No alerts needed - uptime is acceptable\"\n  }\n}];"
+      },
+      "id": "check-alert-conditions",
+      "name": "Check Alert Conditions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "should-alert-condition",
+              "leftValue": "={{$json.should_alert}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-should-alert",
+      "name": "Should Send Alert?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "url": "YOUR_SLACK_WEBHOOK_URL",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.webhook_body}}",
+        "options": {}
+      },
+      "id": "send-slack-alert",
+      "name": "Send Slack Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const message = $json.message || 'No data available for this week';\n\nconst emailContent = `\n<!DOCTYPE html>\n<html>\n<head>\n    <style>\n        body { font-family: Arial, sans-serif; margin: 20px; }\n        .notice { background-color: #fff3cd; padding: 20px; border-radius: 5px; border-left: 4px solid #ffc107; }\n    </style>\n</head>\n<body>\n    <div class=\"notice\">\n        <h3>⚠️ Weekly Monitoring Report Notice</h3>\n        <p>${message}</p>\n        <p><em>Please check your monitoring system configuration.</em></p>\n        <p>Report generated: ${new Date().toLocaleString()}</p>\n    </div>\n</body>\n</html>\n`;\n\nreturn [{\n  json: {\n    subject: \"Weekly Monitoring Report - No Data Available\",\n    html: emailContent,\n    text: `Weekly Monitoring Report Notice\\n\\n${message}\\n\\nReport generated: ${new Date().toLocaleString()}`\n  }\n}];"
+      },
+      "id": "create-no-data-email",
+      "name": "Create No Data Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "monitoring@yourcompany.com",
+        "toEmail": "admin@yourcompany.com",
+        "subject": "={{$json.subject}}",
+        "emailFormat": "html",
+        "message": "={{$json.html}}",
+        "options": {}
+      },
+      "id": "send-no-data-email",
+      "name": "Send No Data Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "weekly-cron": {
+      "main": [
+        [
+          {
+            "node": "prepare-week-dates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "prepare-week-dates": {
+      "main": [
+        [
+          {
+            "node": "get-week-data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get-week-data": {
+      "main": [
+        [
+          {
+            "node": "analyze-week-data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "analyze-week-data": {
+      "main": [
+        [
+          {
+            "node": "check-has-data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-has-data": {
+      "main": [
+        [
+          {
+            "node": "create-email-report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "check-alert-conditions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "create-no-data-email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create-email-report": {
+      "main": [
+        [
+          {
+            "node": "send-email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-alert-conditions": {
+      "main": [
+        [
+          {
+            "node": "check-should-alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-should-alert": {
+      "main": [
+        [
+          {
+            "node": "send-slack-alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "create-no-data-email": {
+      "main": [
+        [
+          {
+            "node": "send-no-data-email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {},
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

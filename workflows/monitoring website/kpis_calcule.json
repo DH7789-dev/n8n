@@ -1,0 +1,332 @@
+{
+  "name": "Website Monitoring - Daily KPIs",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 * * *"
+            }
+          ]
+        }
+      },
+      "id": "daily-cron",
+      "name": "Daily Cron - 00:00",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const yesterday = new Date();\nyesterday.setDate(yesterday.getDate() - 1);\nconst dateStr = yesterday.toISOString().split('T')[0];\n\nreturn [{\n  json: {\n    date: dateStr,\n    supabase_url: 'YOUR_SUPABASE_URL/rest/v1/monitoring_logs?select=*&check_date=eq.' + dateStr\n  }\n}];"
+      },
+      "id": "prepare-date",
+      "name": "Prepare Yesterday Date",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.supabase_url}}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "YOUR_SUPABASE_ANON_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SUPABASE_ANON_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-yesterday-data",
+      "name": "Get Yesterday Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json.body || [];\nconst date = $input.first().json.date;\nconst kpis = {};\n\n// Group by URL\nconst urlGroups = {};\ndata.forEach(item => {\n  if (!urlGroups[item.url]) {\n    urlGroups[item.url] = {\n      name: item.name,\n      category: item.category,\n      checks: [],\n      downtime: 0,\n      totalResponseTime: 0,\n      validResponseTimes: 0\n    };\n  }\n  \n  urlGroups[item.url].checks.push(item);\n  \n  if (item.status === 'DOWN') {\n    urlGroups[item.url].downtime++;\n  }\n  \n  if (item.response_time && item.response_time > 0) {\n    urlGroups[item.url].totalResponseTime += item.response_time;\n    urlGroups[item.url].validResponseTimes++;\n  }\n});\n\n// Calculate KPIs for each URL\nconst urlKpis = [];\nlet worstUrl = null;\nlet worstUptime = 100;\n\nfor (const [url, group] of Object.entries(urlGroups)) {\n  const totalChecks = group.checks.length;\n  const uptime = totalChecks > 0 ? ((totalChecks - group.downtime) / totalChecks) * 100 : 0;\n  const avgResponseTime = group.validResponseTimes > 0 ? group.totalResponseTime / group.validResponseTimes : 0;\n  \n  if (uptime < worstUptime) {\n    worstUptime = uptime;\n    worstUrl = {\n      url: url,\n      name: group.name,\n      uptime: uptime,\n      downtime_count: group.downtime\n    };\n  }\n  \n  urlKpis.push({\n    url: url,\n    name: group.name,\n    category: group.category,\n    date: date,\n    total_checks: totalChecks,\n    downtime_count: group.downtime,\n    uptime_percentage: Math.round(uptime * 100) / 100,\n    avg_response_time: Math.round(avgResponseTime),\n    timestamp: new Date().toISOString()\n  });\n}\n\n// Global KPIs\nconst totalChecks = data.length;\nconst totalDowntime = data.filter(item => item.status === 'DOWN').length;\nconst globalUptime = totalChecks > 0 ? ((totalChecks - totalDowntime) / totalChecks) * 100 : 0;\n\nconst validResponseTimes = data.filter(item => item.response_time && item.response_time > 0);\nconst globalAvgResponseTime = validResponseTimes.length > 0 \n  ? validResponseTimes.reduce((sum, item) => sum + item.response_time, 0) / validResponseTimes.length \n  : 0;\n\nconst globalKpis = {\n  date: date,\n  total_checks: totalChecks,\n  total_downtime: totalDowntime,\n  global_uptime_percentage: Math.round(globalUptime * 100) / 100,\n  global_avg_response_time: Math.round(globalAvgResponseTime),\n  worst_url: worstUrl,\n  unique_urls_monitored: Object.keys(urlGroups).length,\n  timestamp: new Date().toISOString()\n};\n\nreturn [{\n  json: {\n    global_kpis: globalKpis,\n    url_kpis: urlKpis,\n    date: date\n  }\n}];"
+      },
+      "id": "calculate-kpis",
+      "name": "Calculate KPIs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "YOUR_SUPABASE_URL/rest/v1/daily_kpis",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "YOUR_SUPABASE_ANON_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SUPABASE_ANON_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{JSON.stringify($json.global_kpis)}}",
+        "options": {}
+      },
+      "id": "save-global-kpis",
+      "name": "Save Global KPIs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1120,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 10,
+        "options": {}
+      },
+      "id": "split-url-kpis",
+      "name": "Split URL KPIs",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1120,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "url": "YOUR_SUPABASE_URL/rest/v1/url_kpis",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "YOUR_SUPABASE_ANON_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SUPABASE_ANON_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{JSON.stringify($json)}}",
+        "options": {}
+      },
+      "id": "save-url-kpis",
+      "name": "Save URL KPIs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1340,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const kpis = $input.first().json.global_kpis;\nconst worstUrl = kpis.worst_url;\n\nlet message = `📊 **Daily Monitoring Report - ${kpis.date}**\\n\\n`;\nmessage += `🔍 **Global Statistics:**\\n`;\nmessage += `• Total Checks: ${kpis.total_checks}\\n`;\nmessage += `• Global Uptime: ${kpis.global_uptime_percentage}%\\n`;\nmessage += `• Average Response Time: ${kpis.global_avg_response_time}ms\\n`;\nmessage += `• URLs Monitored: ${kpis.unique_urls_monitored}\\n`;\nmessage += `• Total Downtime Incidents: ${kpis.total_downtime}\\n\\n`;\n\nif (worstUrl && worstUrl.uptime < 100) {\n  message += `⚠️ **Worst Performing URL:**\\n`;\n  message += `• ${worstUrl.name} (${worstUrl.url})\\n`;\n  message += `• Uptime: ${worstUrl.uptime}%\\n`;\n  message += `• Downtime Incidents: ${worstUrl.downtime_count}\\n\\n`;\n}\n\nmessage += `*Generated by n8n Monitoring System*`;\n\nreturn [{\n  json: {\n    message: message,\n    date: kpis.date,\n    summary: {\n      uptime: kpis.global_uptime_percentage,\n      avg_response_time: kpis.global_avg_response_time,\n      incidents: kpis.total_downtime\n    }\n  }\n}];"
+      },
+      "id": "format-report",
+      "name": "Format Daily Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{$json.summary.incidents}}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-incidents",
+      "name": "If Incidents Occurred",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "monitoring-reports",
+        "text": "={{$json.message}}",
+        "otherOptions": {}
+      },
+      "id": "send-daily-report",
+      "name": "Send Daily Report",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Daily Cron - 00:00": {
+      "main": [
+        [
+          {
+            "node": "Prepare Yesterday Date",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Yesterday Date": {
+      "main": [
+        [
+          {
+            "node": "Get Yesterday Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Yesterday Data": {
+      "main": [
+        [
+          {
+            "node": "Calculate KPIs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate KPIs": {
+      "main": [
+        [
+          {
+            "node": "Save Global KPIs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Split URL KPIs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Format Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split URL KPIs": {
+      "main": [
+        [
+          {
+            "node": "Save URL KPIs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Daily Report": {
+      "main": [
+        [
+          {
+            "node": "If Incidents Occurred",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Incidents Occurred": {
+      "main": [
+        [
+          {
+            "node": "Send Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

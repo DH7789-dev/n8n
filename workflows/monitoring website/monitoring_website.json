@@ -1,0 +1,311 @@
+{
+  "name": "Monitoring URLs - Corrected",
+  "nodes": [
+    {
+      "parameters": {
+        "interval": [
+          {
+            "triggerAtMinute": 5
+          }
+        ]
+      },
+      "name": "CRON - Toutes les 5 minutes",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [480, 200]
+    },
+    {
+      "parameters": {
+        "authentication": "accessToken",
+        "databaseId": "={{$node[\"Read URLs from Google Sheet\"].json[\"spreadsheetId\"]}}",
+        "sheetName": "={{$node[\"Read URLs from Google Sheet\"].json[\"sheetName\"]}}",
+        "limit": 9999,
+        "options": {}
+      },
+      "name": "Read URLs from Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 2,
+      "position": [700, 200],
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIALS",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "resource": "table",
+        "table": "urls_to_monitor",
+        "filters": [
+          {
+            "fieldName": "active",
+            "fieldValue": true
+          }
+        ]
+      },
+      "name": "Read URLs from Supabase",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [700, 320],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_SUPABASE_CREDENTIALS",
+          "name": "Supabase Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldName": "active",
+        "value": true,
+        "options": {}
+      },
+      "name": "Filter active URLs",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 1,
+      "position": [920, 260]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.url}}",
+        "responseFormat": "json",
+        "timeout": "={{$json.timeout_ms || 10000}}",
+        "options": {
+          "ignoreHttpStatusErrors": true,
+          "responseHeaders": false,
+          "fullResponse": true
+        }
+      },
+      "name": "HTTP Request - Check URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1140, 260]
+    },
+    {
+      "parameters": {
+        "functionCode": "const results = [];\n\nfor (const item of items) {\n  const url = item.json.url;\n  const timestamp = new Date().toISOString();\n  let statusCode = null;\n  let responseTimeMs = null;\n  let error = null;\n  let isDown = false;\n  let errorDetails = null;\n\n  if (item.error) {\n    // Error from HTTP Request node\n    error = item.error.message || 'Unknown HTTP Request Error';\n    isDown = true;\n    errorDetails = JSON.stringify(item.error);\n  } else {\n    // Successful or errored HTTP response\n    statusCode = item.json.statusCode;\n    responseTimeMs = item.json.headers['x-response-time'] ? parseInt(item.json.headers['x-response-time']) : (item.json.elapsedTime || null);\n\n    if (statusCode < 200 || statusCode >= 300) {\n      error = `HTTP Status Code: ${statusCode}`;\n      isDown = true;\n    }\n\n    if (!responseTimeMs) {\n        // Fallback for response time if not in x-response-time header or elapsedTime\n        // This part might need adjustment based on actual httpRequest node output\n        // As of n8n v1.x, elapsedTime is usually available on successful requests\n        // For errors, it might be null or undefined.\n        responseTimeMs = item.json.response?.elapsedTime || null; // Another potential source\n    }\n\n    if (item.json.statusMessage) {\n        // Capture additional status message if available\n        error = error ? `${error} (${item.json.statusMessage})` : item.json.statusMessage;\n    }\n  }\n\n  results.push({\n    json: {\n      url: url,\n      timestamp: timestamp,\n      status_code: statusCode,\n      response_time_ms: responseTimeMs,\n      error: error,\n      is_down: isDown,\n      error_details: errorDetails\n    }\n  });\n}\n\nreturn results;\n"
+      },
+      "name": "Process Response & Errors",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1360, 260]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "resource": "table",
+        "table": "monitoring_logs",
+        "schema": {
+          "columnValues": [
+            {
+              "columnName": "url",
+              "columnValue": "={{$json.url}}"
+            },
+            {
+              "columnName": "timestamp",
+              "columnValue": "={{$json.timestamp}}"
+            },
+            {
+              "columnName": "status_code",
+              "columnValue": "={{$json.status_code}}"
+            },
+            {
+              "columnName": "response_time_ms",
+              "columnValue": "={{$json.response_time_ms}}"
+            },
+            {
+              "columnName": "error",
+              "columnValue": "={{$json.error}}"
+            },
+            {
+              "columnName": "is_down",
+              "columnValue": "={{$json.is_down}}"
+            },
+            {
+              "columnName": "error_details",
+              "columnValue": "={{$json.error_details}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Save to Supabase - Monitoring Logs",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1580, 260],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_SUPABASE_CREDENTIALS",
+          "name": "Supabase Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldName": "is_down",
+        "value": true,
+        "options": {}
+      },
+      "name": "Filter for Down Sites",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 1,
+      "position": [1800, 260]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "databaseId": "YOUR_GOOGLE_SHEET_ID_FOR_LOGS",
+        "sheetName": "Logs de Monitoring",
+        "data": "={{JSON.stringify([{'url': $json.url, 'timestamp': $json.timestamp, 'status_code': $json.status_code, 'response_time_ms': $json.response_time_ms, 'error': $json.error, 'is_down': $json.is_down, 'error_details': $json.error_details}])}}",
+        "options": {}
+      },
+      "name": "Save to Google Sheet - Monitoring Logs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 2,
+      "position": [1580, 360],
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIALS",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "resource": "table",
+        "table": "incidents_logs",
+        "schema": {
+          "columnValues": [
+            {
+              "columnName": "url",
+              "columnValue": "={{$json.url}}"
+            },
+            {
+              "columnName": "timestamp",
+              "columnValue": "={{$json.timestamp}}"
+            },
+            {
+              "columnName": "status_code",
+              "columnValue": "={{$json.status_code}}"
+            },
+            {
+              "columnName": "error_message",
+              "columnValue": "={{$json.error}}"
+            },
+            {
+              "columnName": "incident_resolved",
+              "columnValue": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Log Incident to Supabase",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2020, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_SUPABASE_CREDENTIALS",
+          "name": "Supabase Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "databaseId": "YOUR_GOOGLE_SHEET_ID_FOR_INCIDENTS",
+        "sheetName": "Logs d'Incidents",
+        "data": "={{JSON.stringify([{'url': $json.url, 'timestamp': $json.timestamp, 'status_code': $json.status_code, 'error_message': $json.error, 'incident_resolved': false}])}}",
+        "options": {}
+      },
+      "name": "Log Incident to Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 2,
+      "position": [2020, 300],
+      "credentials": {
+        "googleSheetsApi": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIALS",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channelId": "#alerts",
+        "text": "🚨 ALERTE DOWN : Le site **{{$json.url}}** est en panne ! (Status: {{$json.status_code}}, Erreur: {{$json.error}}) à {{$json.timestamp}}",
+        "options": {}
+      },
+      "name": "Send Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [2240, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIALS",
+          "name": "Slack Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toEmail": "your-email@example.com",
+        "subject": "🚨 ALERTE DOWN : {{$json.url}}",
+        "text": "Le site {{$json.url}} est en panne !\n\nStatus Code: {{$json.status_code}}\nErreur: {{$json.error}}\nTimestamp: {{$json.timestamp}}",
+        "options": {}
+      },
+      "name": "Send Email Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 1,
+      "position": [2240, 300],
+      "credentials": {
+        "smtpAuth": {
+          "id": "YOUR_SMTP_CREDENTIALS",
+          "name": "SMTP Account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "CRON - Toutes les 5 minutes": [
+      ["Read URLs from Supabase", "Read URLs from Google Sheet"]
+    ],
+    "Read URLs from Google Sheet": [
+      ["Filter active URLs"]
+    ],
+    "Read URLs from Supabase": [
+      ["Filter active URLs"]
+    ],
+    "Filter active URLs": [
+      ["HTTP Request - Check URL"]
+    ],
+    "HTTP Request - Check URL": [
+      ["Process Response & Errors"]
+    ],
+    "Process Response & Errors": [
+      ["Save to Supabase - Monitoring Logs", "Save to Google Sheet - Monitoring Logs"]
+    ],
+    "Save to Supabase - Monitoring Logs": [
+      ["Filter for Down Sites"]
+    ],
+    "Filter for Down Sites": [
+      ["Log Incident to Supabase", "Log Incident to Google Sheet"]
+    ],
+    "Log Incident to Supabase": [
+      ["Send Slack Alert", "Send Email Alert"]
+    ],
+    "Log Incident to Google Sheet": [
+      ["Send Slack Alert", "Send Email Alert"]
+    ]
+  },
+  "active": false,
+  "settings": {},
+  "tags": [],
+  "id": null,
+  "meta": {
+    "instanceId": "instance_placeholder"
+  }
+}
